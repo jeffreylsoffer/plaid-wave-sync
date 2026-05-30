@@ -196,8 +196,20 @@ if [ -z "$PLAID_CLIENT_ID" ]; then
 
     plaid login &>/tmp/plaid-login.log &
     PLAID_PID=$!
-    sleep 2
-    grep -o 'https://[^ ]*' /tmp/plaid-login.log | head -1 | xargs -I{} echo -e "\n  ${CYAN}{}${NC}\n"
+    # Wait (up to ~20s) for the auth URL to be written to the log, then show it
+    LOGIN_URL=""
+    for _ in $(seq 1 40); do
+        LOGIN_URL=$(grep -o 'https://[^ ]*' /tmp/plaid-login.log 2>/dev/null | head -1)
+        [ -n "$LOGIN_URL" ] && break
+        sleep 0.5
+    done
+    if [ -n "$LOGIN_URL" ]; then
+        echo -e "\n  ${CYAN}${LOGIN_URL}${NC}\n"
+    else
+        warn "Couldn't capture the login URL automatically. Raw output below — open the https:// link:"
+        sed 's/^/    /' /tmp/plaid-login.log
+        echo ""
+    fi
 
     read -p "  Paste the failed localhost URL: " callback_url
     if echo "$callback_url" | grep -q "localhost.*callback.*code="; then
