@@ -54,8 +54,18 @@ def parse_accounts():
         if len(parts) < 4:
             log.warning(f"Skipping malformed account entry: {entry}")
             continue
-        name, token, wave_account, acct_type = parts[0], parts[1], ":".join(parts[2:-1]), parts[-1]
-        accounts.append({"name": name, "token": token, "wave_account": wave_account, "type": acct_type})
+        name, token, rest = parts[0], parts[1], parts[2:]
+        # Schema: name:token:wave_account:type[:account_id]. Wave name may contain
+        # colons; type is the anchor (checking|credit_card), account_id optional after it.
+        account_id = ""
+        if rest[-1] in ("checking", "credit_card"):
+            acct_type, wave_account = rest[-1], ":".join(rest[:-1])
+        elif len(rest) >= 2 and rest[-2] in ("checking", "credit_card"):
+            acct_type, account_id, wave_account = rest[-2], rest[-1], ":".join(rest[:-2])
+        else:  # legacy fallback: assume last field is type
+            acct_type, wave_account = rest[-1], ":".join(rest[:-1])
+        accounts.append({"name": name, "token": token, "wave_account": wave_account,
+                         "type": acct_type, "account_id": account_id})
     return accounts
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -149,7 +159,7 @@ def find_account_id(accounts, name):
 
 # ─── Categorization ───────────────────────────────────────────────────────────
 
-def categorize(txn_name, accounts, keywords):
+def categorize(txn_name, accounts, keywords, is_expense):
     name_lower = txn_name.lower()
     for keyword, target in keywords.items():
         if keyword in name_lower:
@@ -157,6 +167,11 @@ def categorize(txn_name, accounts, keywords):
                 return None, None, True
             acct = find_account_id(accounts, target)
             if acct:
+                # Don't let a keyword book income into an expense account (or vice
+                # versa) — e.g. a "Notion" payment received shouldn't hit Software.
+                if (is_expense and acct["type"] == "Income") or (not is_expense and acct["type"] == "Expenses"):
+                    log.debug(f"  KEYWORD '{keyword}' → '{target}' skipped (wrong direction for {'expense' if is_expense else 'income'})")
+                    return None, None, False
                 return acct["id"], acct["name"], False
             log.warning(f"  KEYWORD '{keyword}' → '{target}' not found in Wave accounts")
             return None, target, False
@@ -164,7 +179,7 @@ def categorize(txn_name, accounts, keywords):
 
 # ─── Plaid ────────────────────────────────────────────────────────────────────
 
-def fetch_plaid_transactions(access_token, days=30):
+def fetch_plaid_transactions(access_token, days=30, account_ids=None):
     end = datetime.now().strftime("%Y-%m-%d")
     start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     all_txns, offset = [], 0
@@ -172,7 +187,8 @@ def fetch_plaid_transactions(access_token, days=30):
         data = plaid_post("/transactions/get", {
             "access_token": access_token,
             "start_date": start, "end_date": end,
-            "options": {"count": 100, "offset": offset},
+            "options": {"count": 100, "offset": offset,
+                        **({"account_ids": account_ids} if account_ids else {})},
         })
         if "error_code" in data:
             log.error(f"Plaid error: {data['error_code']} - {data.get('error_message','')}")
@@ -359,7 +375,8 @@ def exchange_public_token(public_token):
 def reconcile(accounts_cfg, days):
     log.info(f"\n{'='*60}\nRECONCILIATION (last {days} days)\n{'='*60}")
     for acct_cfg in accounts_cfg:
-        txns = fetch_plaid_transactions(acct_cfg["token"], days)
+        txns = fetch_plaid_transactions(acct_cfg["token"], days,
+                                        [acct_cfg["account_id"]] if acct_cfg.get("account_id") else None)
         plaid_out = sum(t["amount"] for t in txns if t["amount"] > 0 and not t["pending"])
         plaid_in = sum(abs(t["amount"]) for t in txns if t["amount"] < 0 and not t["pending"])
         log.info(f"\n  {acct_cfg['name']}:")
@@ -419,7 +436,7 @@ def main():
                 _json.dump({
                     "access_token": access_token,
                     "item_id": item_id,
-                    "accounts": [{"name": a["name"], "mask": a["mask"], "type": "credit_card" if a["type"] == "credit" else "checking"} for a in accts]
+                    "accounts": [{"name": a["name"], "mask": a["mask"], "account_id": a["account_id"], "type": "credit_card" if a["type"] == "credit" else "checking"} for a in accts]
                 }, f)
         else:
             print("\n✗ No bank connected after 10 minutes.")
@@ -536,7 +553,8 @@ def main():
 
         log.info(f"\n{'='*60}\n{acct_cfg['name']} → {wallet['name']} ({acct_type})\n{'='*60}")
 
-        txns = fetch_plaid_transactions(acct_cfg["token"], args.days)
+        txns = fetch_plaid_transactions(acct_cfg["token"], args.days,
+                                        [acct_cfg["account_id"]] if acct_cfg.get("account_id") else None)
         log.info(f"Fetched {len(txns)} transactions")
 
         for txn in txns:
@@ -558,7 +576,7 @@ def main():
                 continue
 
             is_expense = amount > 0
-            line_id, matched, skip = categorize(name, wave_accounts, keywords)
+            line_id, matched, skip = categorize(name, wave_accounts, keywords, is_expense)
 
             if skip:
                 log.debug(f"  SKIP: {name}")

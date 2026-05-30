@@ -48,6 +48,46 @@ info() {
     echo -e "  ${DIM}$1${NC}"
 }
 
+# Extract production client_id/secret from plaid-cli config (tab-separated).
+# Walks the JSON and prefers any path containing "production" so we never grab
+# a sandbox/development secret by accident.
+read_plaid_creds() {
+    [ -f ~/.config/plaid-cli/config.json ] || return 1
+    python3 - "$HOME/.config/plaid-cli/config.json" <<'PY'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+best = {}
+def walk(o, prod):
+    if isinstance(o, dict):
+        cid, sec = o.get('client_id'), o.get('secret')
+        if cid or sec:
+            slot = best.setdefault('prod' if prod else 'any', {})
+            if cid: slot.setdefault('client_id', cid)
+            if sec: slot.setdefault('secret', sec)
+        for k, v in o.items():
+            walk(v, prod or 'production' in str(k).lower())
+    elif isinstance(o, list):
+        for v in o: walk(v, prod)
+walk(d, False)
+c = best.get('prod') or best.get('any') or {}
+print((c.get('client_id') or '') + '\t' + (c.get('secret') or ''))
+PY
+}
+
+# Validate Plaid production credentials. Returns non-zero only when Plaid
+# explicitly rejects them (400/401/403) so transient/offline errors don't block.
+validate_plaid_creds() {
+    local cid="$1" sec="$2" code
+    [ -z "$cid" ] || [ -z "$sec" ] && return 1
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "Content-Type: application/json" \
+        --data-raw "{\"client_id\":\"$cid\",\"secret\":\"$sec\",\"country_codes\":[\"US\"],\"count\":1,\"offset\":0}" \
+        "https://production.plaid.com/institutions/get" 2>/dev/null || echo "000")
+    case "$code" in 400|401|403) return 1 ;; *) return 0 ;; esac
+}
+
 # ─── Header ───────────────────────────────────────────────────────────────────
 
 clear
@@ -107,11 +147,17 @@ if [ -f ~/.config/plaid-cli/config.json ] && grep -q '"client_id"' ~/.config/pla
     [ -z "$TEAM_ID" ] && TEAM_ID=$(plaid teams list 2>/dev/null | grep -i "Individual" | awk '{print $2}')
     [ -n "$TEAM_ID" ] && plaid teams use "$TEAM_ID" &>/dev/null
     plaid keys fetch &>/dev/null || true
-    # Re-export after team switch
-    export PLAID_CLIENT_ID=$(grep -o '"client_id": *"[^"]*"' ~/.config/plaid-cli/config.json 2>/dev/null | tail -1 | cut -d'"' -f4)
-    export PLAID_SECRET=$(grep -o '"secret": *"[^"]*"' ~/.config/plaid-cli/config.json 2>/dev/null | tail -1 | cut -d'"' -f4)
-    if [ -n "$PLAID_CLIENT_ID" ] && [ "$PLAID_CLIENT_ID" != "" ]; then
-        success "Already logged in (Client ID: $PLAID_CLIENT_ID)"
+    # Re-read production credentials after team switch
+    CREDS=$(read_plaid_creds)
+    export PLAID_CLIENT_ID=$(printf '%s' "$CREDS" | cut -f1)
+    export PLAID_SECRET=$(printf '%s' "$CREDS" | cut -f2)
+    if [ -n "$PLAID_CLIENT_ID" ]; then
+        if validate_plaid_creds "$PLAID_CLIENT_ID" "$PLAID_SECRET"; then
+            success "Already logged in (Client ID: $PLAID_CLIENT_ID)"
+        else
+            warn "Saved credentials are invalid for Production. Will prompt for manual entry."
+            unset PLAID_CLIENT_ID PLAID_SECRET
+        fi
     else
         # Config exists but no valid credentials — fall through to login
         unset PLAID_CLIENT_ID PLAID_SECRET
@@ -170,9 +216,21 @@ if [ -z "$PLAID_CLIENT_ID" ]; then
         [ -z "$TEAM_ID" ] && TEAM_ID=$(plaid teams list 2>/dev/null | grep -i "Individual" | awk '{print $2}')
         [ -n "$TEAM_ID" ] && plaid teams use "$TEAM_ID" &>/dev/null
         plaid keys fetch &>/dev/null || true
-        export PLAID_CLIENT_ID=$(plaid config 2>/dev/null | grep "Client ID" | awk '{print $NF}')
-        export PLAID_SECRET=$(grep -o '"secret": *"[^"]*"' ~/.config/plaid-cli/config.json 2>/dev/null | tail -1 | cut -d'"' -f4)
-        success "Client ID: $PLAID_CLIENT_ID"
+        CREDS=$(read_plaid_creds)
+        export PLAID_CLIENT_ID=$(printf '%s' "$CREDS" | cut -f1)
+        [ -z "$PLAID_CLIENT_ID" ] && export PLAID_CLIENT_ID=$(plaid config 2>/dev/null | grep "Client ID" | awk '{print $NF}')
+        export PLAID_SECRET=$(printf '%s' "$CREDS" | cut -f2)
+        if validate_plaid_creds "$PLAID_CLIENT_ID" "$PLAID_SECRET"; then
+            success "Client ID: $PLAID_CLIENT_ID"
+        else
+            warn "Production credentials from login are invalid. Enter them manually:"
+            echo -e "  ${CYAN}https://dashboard.plaid.com/developers/keys${NC}"
+            read -p "  Client ID: " PLAID_CLIENT_ID
+            read -p "  Secret (Production): " PLAID_SECRET
+            export PLAID_CLIENT_ID PLAID_SECRET
+            plaid config set --client-id "$PLAID_CLIENT_ID" --secret "$PLAID_SECRET" --env production 2>/dev/null
+            success "Credentials saved"
+        fi
     else
         wait $PLAID_PID 2>/dev/null || true
         warn "Invalid URL. Let's enter credentials manually instead:"
@@ -217,16 +275,28 @@ EXISTING_ITEMS=${EXISTING_ITEMS:-0}
 if [ "$EXISTING_ITEMS" -gt "0" ]; then
     success "Found $EXISTING_ITEMS connected bank(s):"
     plaid item list 2>/dev/null | grep -v "^$" | while read -r line; do echo -e "    $line"; done
-    # Rebuild the token file from existing items for matching later
-    plaid item list --json 2>/dev/null | uv run python3 -c "
-import json, sys
+    # Rebuild the token file from existing items using real account details
+    plaid item list --json 2>/dev/null | PLAID_CLIENT_ID="$PLAID_CLIENT_ID" PLAID_SECRET="$PLAID_SECRET" uv run --with httpx python3 -c "
+import json, sys, os, httpx
 items = json.load(sys.stdin)
+cid, sec = os.environ.get('PLAID_CLIENT_ID',''), os.environ.get('PLAID_SECRET','')
 with open('/tmp/plaid-tokens-all.jsonl', 'w') as f:
     for item in items:
-        for acct in item.get('accounts', [{'name': item.get('institution_name','Bank'), 'mask': '0000', 'type': 'checking'}]):
-            entry = {'access_token': item['access_token'], 'accounts': [acct]}
-            f.write(json.dumps(entry) + '\n')
-" 2>/dev/null && info "Tokens loaded for matching"
+        tok = item.get('access_token')
+        if not tok:
+            continue
+        try:
+            r = httpx.post('https://production.plaid.com/accounts/get',
+                json={'client_id': cid, 'secret': sec, 'access_token': tok}, timeout=30)
+            accts = r.json().get('accounts', [])
+        except Exception:
+            accts = []
+        rows = [{'name': a.get('name','Bank'), 'mask': a.get('mask') or '',
+                 'account_id': a.get('account_id',''),
+                 'type': 'credit_card' if a.get('type')=='credit' else 'checking'} for a in accts]
+        if rows:
+            f.write(json.dumps({'access_token': tok, 'accounts': rows}) + '\n')
+" 2>/dev/null && info "Loaded real account details for matching"
     echo ""
     read -p "  Add another bank? (y/n): " choice
     [ "$choice" != "y" ] && choice="n"
@@ -386,71 +456,53 @@ if [ -f /tmp/plaid-tokens-all.jsonl ]; then
         uv run scripts/match_accounts.py
 
         # Handle unmatched accounts interactively
-        if [ -f /tmp/plaid-access-tokens.txt ]; then
-            PLAID_ACCESS_TOKENS=$(cat /tmp/plaid-access-tokens.txt | tr -d '\n')
-        fi
+        # Load auto-matched accounts, then resolve the remainder interactively
+        PLAID_ACCESS_TOKENS=""
+        [ -f /tmp/plaid-access-tokens.txt ] && PLAID_ACCESS_TOKENS=$(tr -d '\n' < /tmp/plaid-access-tokens.txt)
 
-        # Check for unmatched accounts in the output
-        if [ -z "$PLAID_ACCESS_TOKENS" ]; then
-            # Read all lines from the jsonl into an array
-            mapfile -t UNMATCHED_LINES < /tmp/plaid-tokens-all.jsonl 2>/dev/null
-
-            if [ ${#UNMATCHED_LINES[@]} -eq 0 ]; then
-                warn "No accounts found in token file."
-            fi
-
-            for line in "${UNMATCHED_LINES[@]}"; do
+        if [ -f /tmp/plaid-unmatched.jsonl ] && [ -s /tmp/plaid-unmatched.jsonl ]; then
+            echo ""
+            info "These accounts need a manual pick (only type-compatible Wave accounts are shown):"
+            # Reading from a file (not a pipe) keeps PLAID_ACCESS_TOKENS in this shell
+            while IFS= read -r line; do
                 [ -z "$line" ] && continue
-
                 PARSED=$(printf '%s' "$line" | uv run python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-a=d['accounts'][0]
-t='credit_card' if a.get('type')=='credit_card' else 'checking'
-print(a.get('name','Unknown') + '\t' + d.get('access_token','') + '\t' + t)
+print('\t'.join([d.get('name','Bank'),d.get('token',''),d.get('type','checking'),d.get('account_id','')]))
 " 2>/dev/null)
-                ACCT_NAME=$(echo "$PARSED" | cut -f1)
-                ACCT_TOKEN=$(echo "$PARSED" | cut -f2)
-                ACCT_TYPE=$(echo "$PARSED" | cut -f3)
-
-                # Skip if already matched
-                if [ -n "$PLAID_ACCESS_TOKENS" ] && [ -n "$ACCT_TOKEN" ]; then
-                    echo "$PLAID_ACCESS_TOKENS" | grep -q "$ACCT_TOKEN" 2>/dev/null && continue
-                fi
-
-                # Show available Wave accounts
-                if [ -f /tmp/wave-account-options.txt ] && [ -s /tmp/wave-account-options.txt ]; then
-                    echo ""
-                    echo -e "  ${BOLD}Which Wave account is '$ACCT_NAME' ($ACCT_TYPE)?${NC}"
-                    cat /tmp/wave-account-options.txt | awk '{printf "    %d. %s\n", NR, $0}'
-                    echo ""
-                    read -p "  Enter number or name: " wave_input
+                ACCT_NAME=$(printf '%s' "$PARSED" | cut -f1)
+                ACCT_TOKEN=$(printf '%s' "$PARSED" | cut -f2)
+                ACCT_TYPE=$(printf '%s' "$PARSED" | cut -f3)
+                ACCT_ID=$(printf '%s' "$PARSED" | cut -f4)
+                [ "$ACCT_TYPE" = "credit_card" ] && CAT="liability" || CAT="asset"
+                # List ALL accounts, compatible type first, each labeled — pick by number
+                { grep "|${CAT}$" /tmp/wave-account-options.txt; grep -v "|${CAT}$" /tmp/wave-account-options.txt; } 2>/dev/null > /tmp/wave-opts-display.txt
+                echo ""
+                echo -e "  ${BOLD}Which Wave account is '$ACCT_NAME' ($ACCT_TYPE)?${NC}"
+                if [ -s /tmp/wave-opts-display.txt ]; then
+                    awk -F'|' '{printf "    %d. %s  [%s]\n", NR, $1, $2}' /tmp/wave-opts-display.txt
+                    echo -e "    0. Skip this account"
+                    read -p "  Enter a number (or type a name): " wave_input
                 else
-                    echo ""
-                    read -p "  Wave account name for '$ACCT_NAME' ($ACCT_TYPE): " wave_input
+                    read -p "  Wave account name (none auto-listed, Enter to skip): " wave_input
                 fi
-
-                # If they typed a number, look it up
-                if [ -n "$wave_input" ] && [ "$wave_input" -eq "$wave_input" ] 2>/dev/null; then
-                    wave_name=$(sed -n "${wave_input}p" /tmp/wave-account-options.txt 2>/dev/null)
+                { [ "$wave_input" = "0" ] || [ -z "$wave_input" ]; } && continue
+                if [ "$wave_input" -eq "$wave_input" ] 2>/dev/null; then
+                    wave_name=$(sed -n "${wave_input}p" /tmp/wave-opts-display.txt 2>/dev/null | cut -d'|' -f1)
                 else
                     wave_name="$wave_input"
                 fi
-
                 if [ -n "$wave_name" ]; then
                     success "Mapped $ACCT_NAME → $wave_name"
-                    ENTRY="${ACCT_NAME}:${ACCT_TOKEN}:${wave_name}:${ACCT_TYPE}"
-                    if [ -z "$PLAID_ACCESS_TOKENS" ]; then
-                        PLAID_ACCESS_TOKENS="$ENTRY"
-                    else
-                        PLAID_ACCESS_TOKENS="${PLAID_ACCESS_TOKENS},${ENTRY}"
-                    fi
+                    ENTRY="${ACCT_NAME}:${ACCT_TOKEN}:${wave_name}:${ACCT_TYPE}:${ACCT_ID}"
+                    [ -z "$PLAID_ACCESS_TOKENS" ] && PLAID_ACCESS_TOKENS="$ENTRY" || PLAID_ACCESS_TOKENS="${PLAID_ACCESS_TOKENS},${ENTRY}"
                 fi
-            done
+            done < /tmp/plaid-unmatched.jsonl
         fi
 
         export PLAID_ACCESS_TOKENS
-        rm -f /tmp/plaid-tokens-all.jsonl /tmp/plaid-access-tokens.txt /tmp/wave-account-options.txt
+        rm -f /tmp/plaid-tokens-all.jsonl /tmp/plaid-access-tokens.txt /tmp/plaid-unmatched.jsonl /tmp/wave-account-options.txt /tmp/wave-opts-display.txt
         if [ -n "$PLAID_ACCESS_TOKENS" ]; then
             success "PLAID_ACCESS_TOKENS ready"
         fi
@@ -515,118 +567,56 @@ fi
 
 step "Step 6/6 · Save secrets to GitHub"
 
+info "These are saved as ${BOLD}repository${NC} secrets (Settings → Secrets and variables → Actions)."
+info "Do not use Environment secrets — the sync workflow reads repo-level secrets only."
+
+# PLAID_SECRET is required at runtime; never save it empty
+if [ -z "$PLAID_SECRET" ]; then
+    warn "PLAID_SECRET is empty — Plaid auth will fail at runtime."
+    echo -e "  Get your Production secret: ${CYAN}https://dashboard.plaid.com/developers/keys${NC}"
+    read -p "  Enter Plaid Secret (Production): " PLAID_SECRET
+    export PLAID_SECRET
+fi
+
+_set_secret() {  # name value
+    if [ -z "$2" ]; then warn "$1 is empty — set it manually"; return; fi
+    if gh secret set "$1" --body "$2"; then success "Saved $1"; else warn "Failed to save $1"; fi
+}
+
 read -p "  Auto-save secrets to this repo? (y/n): " save_secrets
 if [ "$save_secrets" = "y" ]; then
-    CLIENT_ID="${PLAID_CLIENT_ID}"
-    SECRET="${PLAID_SECRET}"
-
-    # Test if we have permission, if not re-auth gh
-    if ! gh secret set PLAID_CLIENT_ID --body "$CLIENT_ID" 2>/dev/null; then
+    # gh prefers an ambient token; in Codespaces that token is read-only for
+    # secrets, so drop both and let `gh auth login` grant the repo scope.
+    if ! gh secret set PLAID_CLIENT_ID --body "$PLAID_CLIENT_ID" 2>/dev/null; then
         info "Need GitHub auth to save secrets (one-time)."
-        unset GITHUB_TOKEN
-        gh auth login -w -p https --git-protocol https
+        unset GITHUB_TOKEN GH_TOKEN
+        gh auth login -w -p https --git-protocol https -s repo
     fi
 
     # Make repo private to protect financial data in Action logs
     gh repo edit --visibility private 2>/dev/null && success "Repo set to private" || true
 
-    gh secret set PLAID_CLIENT_ID --body "$CLIENT_ID" &>/dev/null && success "Saved PLAID_CLIENT_ID"
-    if [ -n "$SECRET" ]; then
-        gh secret set PLAID_SECRET --body "$SECRET" &>/dev/null && success "Saved PLAID_SECRET"
-    else
-        warn "PLAID_SECRET is empty — set it manually"
-    fi
-    if [ -n "$WAVE_ACCESS_TOKEN" ]; then
-        gh secret set WAVE_ACCESS_TOKEN --body "$WAVE_ACCESS_TOKEN" &>/dev/null && success "Saved WAVE_ACCESS_TOKEN"
-    else
-        warn "WAVE_ACCESS_TOKEN is empty — set it manually"
-    fi
-    if [ -n "$WAVE_BUSINESS_ID" ]; then
-        gh secret set WAVE_BUSINESS_ID --body "$WAVE_BUSINESS_ID" &>/dev/null && success "Saved WAVE_BUSINESS_ID"
-    else
-        warn "WAVE_BUSINESS_ID is empty — set it manually"
-    fi
+    _set_secret PLAID_CLIENT_ID "$PLAID_CLIENT_ID"
+    _set_secret PLAID_SECRET "$PLAID_SECRET"
+    _set_secret WAVE_ACCESS_TOKEN "$WAVE_ACCESS_TOKEN"
+    _set_secret WAVE_BUSINESS_ID "$WAVE_BUSINESS_ID"
 
     echo ""
+    if [ -z "$PLAID_ACCESS_TOKENS" ]; then
+        warn "PLAID_ACCESS_TOKENS wasn't assembled — paste it manually."
+        info "Format: Name:token:Wave Account Name:type[:account_id]  (comma-separated for multiple)"
+        info "List connected items with: plaid item list --json"
+        read -p "  Paste PLAID_ACCESS_TOKENS (or Enter to skip): " tokens
+        [ -n "$tokens" ] && PLAID_ACCESS_TOKENS="$tokens" && export PLAID_ACCESS_TOKENS
+    fi
     if [ -n "$PLAID_ACCESS_TOKENS" ]; then
-        gh secret set PLAID_ACCESS_TOKENS --body "$PLAID_ACCESS_TOKENS" &>/dev/null &
-        spinner $! "Saving PLAID_ACCESS_TOKENS"
+        _set_secret PLAID_ACCESS_TOKENS "$PLAID_ACCESS_TOKENS"
     else
-        # Try to build PLAID_ACCESS_TOKENS interactively from connected items
-        echo ""
-        warn "PLAID_ACCESS_TOKENS not assembled automatically. Let's build it now."
-        echo ""
-
-        # Get connected Plaid items
-        PLAID_ITEMS=$(plaid item list --json 2>/dev/null)
-        if [ -n "$PLAID_ITEMS" ] && [ "$PLAID_ITEMS" != "[]" ]; then
-            # Get Wave accounts for reference
-            echo -e "  ${BOLD}Your Wave accounts:${NC}"
-            uv run plaid_sync.py --dump-accounts 2>/dev/null | grep "^  " | head -20
-            echo ""
-            echo -e "  ${BOLD}Your connected Plaid items:${NC}"
-            echo "$PLAID_ITEMS" | uv run python3 -c "
-import json, sys
-items = json.load(sys.stdin)
-for i, item in enumerate(items):
-    token = item.get('access_token', 'unknown')
-    name = item.get('institution_name', item.get('institution_id', f'Bank {i+1}'))
-    print(f'  {i+1}. {name} (token: {token[:20]}...)')
-" 2>/dev/null
-            echo ""
-
-            # Build token string interactively
-            BUILT_TOKENS=""
-            echo "$PLAID_ITEMS" | uv run python3 -c "
-import json, sys
-items = json.load(sys.stdin)
-for item in items:
-    token = item.get('access_token', '')
-    name = item.get('institution_name', 'Bank')
-    print(f'{name}|{token}')
-" 2>/dev/null | while IFS='|' read -r bank_name access_token; do
-                echo ""
-                echo -e "  ${BOLD}${bank_name}${NC}:"
-                read -p "    Wave account name (e.g. 'Business Checking (001)'): " wave_acct
-                read -p "    Type (checking or credit_card): " acct_type
-                [ -z "$acct_type" ] && acct_type="checking"
-                if [ -n "$wave_acct" ]; then
-                    ENTRY="${bank_name}:${access_token}:${wave_acct}:${acct_type}"
-                    if [ -z "$BUILT_TOKENS" ]; then
-                        BUILT_TOKENS="$ENTRY"
-                    else
-                        BUILT_TOKENS="${BUILT_TOKENS},${ENTRY}"
-                    fi
-                fi
-            done
-
-            if [ -n "$BUILT_TOKENS" ]; then
-                PLAID_ACCESS_TOKENS="$BUILT_TOKENS"
-            fi
-        fi
-
-        # Final fallback — manual paste
-        if [ -z "$PLAID_ACCESS_TOKENS" ]; then
-            info "Could not auto-detect. Paste the value manually:"
-            info "Format: Name:access-token:Wave Account Name:type"
-            info "Example: MyBank:access-prod-xxx:Business Checking (001):checking"
-            echo ""
-            echo -e "  Get tokens with: ${CYAN}plaid item list --json${NC}"
-            echo ""
-            read -p "  Paste PLAID_ACCESS_TOKENS (or Enter to skip): " tokens
-            [ -n "$tokens" ] && PLAID_ACCESS_TOKENS="$tokens"
-        fi
-
-        if [ -n "$PLAID_ACCESS_TOKENS" ]; then
-            gh secret set PLAID_ACCESS_TOKENS --body "$PLAID_ACCESS_TOKENS" &>/dev/null &
-            spinner $! "Saving PLAID_ACCESS_TOKENS"
-        else
-            warn "PLAID_ACCESS_TOKENS not set. The Action will fail until this is configured."
-            info "Re-run ./setup.sh or set it manually in Settings → Secrets → Actions"
-        fi
+        warn "PLAID_ACCESS_TOKENS not set. The Action will fail until this is configured."
+        info "Re-run ./setup.sh or set it manually in Settings → Secrets → Actions"
     fi
 else
-    warn "Add secrets manually: Settings → Secrets → Actions"
+    warn "Add secrets manually: Settings → Secrets and variables → Actions (Repository secrets)."
 fi
 
 # ─── Done ─────────────────────────────────────────────────────────────────────

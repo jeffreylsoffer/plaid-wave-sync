@@ -23,16 +23,23 @@ jobs:
       - name: Check secrets configured
         env:
           PLAID_CLIENT_ID: ${{ secrets.PLAID_CLIENT_ID }}
+          PLAID_SECRET: ${{ secrets.PLAID_SECRET }}
           PLAID_ACCESS_TOKENS: ${{ secrets.PLAID_ACCESS_TOKENS }}
+          WAVE_ACCESS_TOKEN: ${{ secrets.WAVE_ACCESS_TOKEN }}
         run: |
-          if [ -z "$PLAID_CLIENT_ID" ] || [ -z "$PLAID_ACCESS_TOKENS" ]; then
-            echo "::error::Setup incomplete. Open this repo in a Codespace and run ./setup.sh to configure your accounts."
+          MISSING=""
+          [ -z "$PLAID_CLIENT_ID" ] && MISSING="$MISSING PLAID_CLIENT_ID"
+          [ -z "$PLAID_SECRET" ] && MISSING="$MISSING PLAID_SECRET"
+          [ -z "$PLAID_ACCESS_TOKENS" ] && MISSING="$MISSING PLAID_ACCESS_TOKENS"
+          [ -z "$WAVE_ACCESS_TOKEN" ] && MISSING="$MISSING WAVE_ACCESS_TOKEN"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Setup incomplete. Missing repository secrets:$MISSING"
             echo ""
-            echo "Missing:"
-            [ -z "$PLAID_CLIENT_ID" ] && echo "  - PLAID_CLIENT_ID"
-            [ -z "$PLAID_ACCESS_TOKENS" ] && echo "  - PLAID_ACCESS_TOKENS"
+            echo "These must be REPOSITORY secrets (Settings → Secrets and variables → Actions),"
+            echo "not Environment secrets — this workflow does not target an environment."
             echo ""
-            echo "Fix: https://github.com/${{ github.repository }}#setup-5-minutes"
+            echo "Fix: open this repo in a Codespace and run ./setup.sh, or add them manually."
+            echo "Docs: https://github.com/${{ github.repository }}#setup-5-minutes"
             exit 1
           fi
 
