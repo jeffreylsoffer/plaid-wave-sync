@@ -182,13 +182,8 @@ if [ -z "$PLAID_CLIENT_ID" ]; then
         echo ""
     fi
 
-    echo -e "  ${BOLD}Log in to Plaid:${NC}"
-    echo -e "  1. ${BOLD}Cmd+Click${NC} (or Ctrl+Click) the link below"
-    echo -e "  2. Log in to Plaid in your browser"
-    echo -e "  3. Browser will fail on a localhost URL — ${GREEN}that's expected${NC}"
-    echo -e "  4. Copy that URL and paste it here"
-    echo ""
-    read -p "  Press Enter to start..."
+    echo -e "  ${BOLD}Log in to Plaid${NC} — press Enter and a login link will appear here."
+    read -p "  Press Enter to generate your login link..."
 
     # Kill any stale plaid login processes
     pkill -f "plaid login" 2>/dev/null || true
@@ -211,6 +206,11 @@ if [ -z "$PLAID_CLIENT_ID" ]; then
         echo ""
     fi
 
+    echo -e "  Now:"
+    echo -e "  1. ${BOLD}Cmd+Click${NC} (or Ctrl+Click) the link above and log in to Plaid"
+    echo -e "  2. Your browser will fail on a ${BOLD}localhost${NC} URL — ${GREEN}that's expected${NC}"
+    echo -e "  3. Copy that localhost URL and paste it below"
+    echo ""
     read -p "  Paste the failed localhost URL: " callback_url
     if echo "$callback_url" | grep -q "localhost.*callback.*code="; then
         info "Sending callback to plaid login server..."
