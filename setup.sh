@@ -111,15 +111,21 @@ step "Step 1/6 · Installing tools"
 if command -v plaid &>/dev/null; then
     success "Plaid CLI already installed"
 else
+    export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ANALYTICS=1 NONINTERACTIVE=1
     if ! command -v brew &>/dev/null; then
         info "Installing Homebrew (this takes ~60s on first run)..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null &>/tmp/brew-install.log &
+        # Subshell exits 0 on purpose: the installer can exit non-zero on a benign
+        # post-install metadata refresh (stale 'brew update' lock / SIGHUP) even though
+        # brew itself installs fine. We verify real success via 'command -v' below.
+        { /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null &>/tmp/brew-install.log; true; } &
         spinner $! "Installing Homebrew"
         eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" 2>/dev/null || true
+        command -v brew &>/dev/null || warn "Homebrew may not have installed cleanly — see /tmp/brew-install.log"
     fi
     brew install plaid/plaid-cli/plaid &>/tmp/plaid-install.log &
     spinner $! "Installing Plaid CLI"
     eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" 2>/dev/null || true
+    command -v plaid &>/dev/null || warn "Plaid CLI install failed — see /tmp/plaid-install.log"
 fi
 
 if command -v uv &>/dev/null; then
