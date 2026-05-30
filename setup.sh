@@ -53,7 +53,7 @@ info() {
 # a sandbox/development secret by accident.
 read_plaid_creds() {
     [ -f ~/.config/plaid-cli/config.json ] || return 1
-    python3 - "$HOME/.config/plaid-cli/config.json" <<'PY'
+    uv run python3 - "$HOME/.config/plaid-cli/config.json" <<'PY'
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
