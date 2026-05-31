@@ -48,6 +48,18 @@ info() {
     echo -e "  ${DIM}$1${NC}"
 }
 
+github_repo_slug() {
+    git config --get remote.origin.url | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'
+}
+
+gh_safe() {
+    env -u GITHUB_TOKEN -u GH_TOKEN gh "$@"
+}
+
+gh_repo() {
+    gh_safe "$@" --repo "$GH_REPO"
+}
+
 # Extract production client_id/secret from plaid-cli config (tab-separated).
 # Walks the JSON and prefers any path containing "production" so we never grab
 # a sandbox/development secret by accident.
@@ -91,6 +103,7 @@ validate_plaid_creds() {
 # ─── Header ───────────────────────────────────────────────────────────────────
 
 clear
+GH_REPO=$(github_repo_slug)
 echo ""
 echo -e "${BOLD}  ╔══════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}  ║     ${CYAN}plaid-wave-sync${NC}${BOLD} setup              ║${NC}"
@@ -405,7 +418,7 @@ fi
 
 if [ -z "$WAVE_ACCESS_TOKEN" ]; then
     # Check if it's already saved as a GitHub secret (user re-running setup)
-    if gh secret list 2>/dev/null | grep -q "WAVE_ACCESS_TOKEN"; then
+    if gh_repo secret list 2>/dev/null | grep -q "WAVE_ACCESS_TOKEN"; then
         info "WAVE_ACCESS_TOKEN already saved in GitHub secrets, but we need a copy locally for matching."
         echo -e "  Get it from: ${CYAN}https://developer-apps.waveapps.com${NC} → your app → Full Access Token"
         read -p "  Paste your Wave token: " WAVE_ACCESS_TOKEN
@@ -598,21 +611,20 @@ fi
 
 _set_secret() {  # name value
     if [ -z "$2" ]; then warn "$1 is empty — set it manually"; return; fi
-    if gh secret set "$1" --body "$2"; then success "Saved $1"; else warn "Failed to save $1"; fi
+    if gh_repo secret set "$1" --body "$2"; then success "Saved $1"; else warn "Failed to save $1"; fi
 }
 
 read -p "  Auto-save secrets to this repo? (y/n): " save_secrets
 if [ "$save_secrets" = "y" ]; then
     # gh prefers an ambient token; in Codespaces that token is read-only for
     # secrets, so drop both and let `gh auth login` grant the repo scope.
-    if ! gh secret set PLAID_CLIENT_ID --body "$PLAID_CLIENT_ID" 2>/dev/null; then
+    if ! gh_repo secret set PLAID_CLIENT_ID --body "$PLAID_CLIENT_ID" 2>/dev/null; then
         info "Need GitHub auth to save secrets (one-time)."
-        unset GITHUB_TOKEN GH_TOKEN
-        gh auth login -w -p https --git-protocol https -s repo
+        gh_safe auth login -w -p https --git-protocol https -s repo
     fi
 
     # Make repo private to protect financial data in Action logs
-    gh repo edit --visibility private 2>/dev/null && success "Repo set to private" || true
+    gh_repo repo edit --visibility private 2>/dev/null && success "Repo set to private" || true
 
     _set_secret PLAID_CLIENT_ID "$PLAID_CLIENT_ID"
     _set_secret PLAID_SECRET "$PLAID_SECRET"
@@ -643,28 +655,28 @@ fi
 if [ -z "$PLAID_CLIENT_ID" ] || [ -z "$PLAID_ACCESS_TOKENS" ]; then
     warn "Skipping workflow enable — secrets incomplete. Re-run ./setup.sh when ready."
 else
-    if ! gh workflow enable sync.yml 2>/dev/null; then
-        REPO_URL=$(gh repo view --json url -q '.url' 2>/dev/null)
+    if ! gh_repo workflow enable sync.yml 2>/dev/null; then
+        REPO_URL=$(gh_repo repo view --json url -q '.url' 2>/dev/null)
         echo ""
         warn "GitHub requires you to manually enable Actions on a new fork."
         echo -e "  1. Open: ${CYAN}${REPO_URL}/actions${NC}"
         echo -e "  2. Click: ${BOLD}I understand my workflows, go ahead and enable them${NC}"
         echo ""
         read -p "  Press Enter once you've clicked the button..."
-        gh workflow enable sync.yml &>/dev/null
+        gh_repo workflow enable sync.yml &>/dev/null
     fi
     success "GitHub Actions workflow enabled"
 
     # Trigger a test run
-    if gh workflow run sync.yml -f days=3 -f dry_run=true 2>/dev/null; then
+    if gh_repo workflow run sync.yml -f days=3 -f dry_run=true 2>/dev/null; then
         success "Test run triggered (dry-run)"
 
         info "Waiting for test run to complete..."
         sleep 10
-        RUN_ID=$(gh run list --workflow=sync.yml -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)
+        RUN_ID=$(gh_repo run list --workflow=sync.yml -L 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)
         if [ -n "$RUN_ID" ]; then
-            gh run watch "$RUN_ID" --exit-status 2>/dev/null && success "Test run passed! ✓" || warn "Test run failed — check Actions tab for details"
-            REPO_URL=$(gh repo view --json url -q '.url' 2>/dev/null)
+            gh_repo run watch "$RUN_ID" --exit-status 2>/dev/null && success "Test run passed! ✓" || warn "Test run failed — check Actions tab for details"
+            REPO_URL=$(gh_repo repo view --json url -q '.url' 2>/dev/null)
             echo -e "  ${CYAN}${REPO_URL}/actions/runs/${RUN_ID}${NC}"
         fi
     else
