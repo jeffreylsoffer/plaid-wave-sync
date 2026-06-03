@@ -218,6 +218,11 @@ if [ -z "$PLAID_CLIENT_ID" ]; then
     echo -e "  3. Copy that localhost URL and paste it below"
     echo ""
     read -p "  Paste the failed localhost URL: " callback_url
+    while ! echo "$callback_url" | grep -q "localhost.*callback.*code="; do
+        warn "That doesn't look right — need a URL like: http://localhost:.../oauth/callback?code=..."
+        read -p "  Paste the URL (or 'q' to enter credentials manually): " callback_url
+        [ "$callback_url" = "q" ] && break
+    done
     if echo "$callback_url" | grep -q "localhost.*callback.*code="; then
         info "Sending callback to plaid login server..."
         curl -s "$callback_url" &>/dev/null &
@@ -257,6 +262,15 @@ if [ -z "$PLAID_CLIENT_ID" ]; then
         read -p "  Client ID: " PLAID_CLIENT_ID
         read -p "  Secret (Production): " PLAID_SECRET
         export PLAID_CLIENT_ID PLAID_SECRET
+        while ! validate_plaid_creds "$PLAID_CLIENT_ID" "$PLAID_SECRET"; do
+            warn "Those credentials didn't work. Check them at:"
+            echo -e "  ${CYAN}https://dashboard.plaid.com/developers/keys${NC}"
+            echo ""
+            read -p "  Client ID (or 'q' to skip): " PLAID_CLIENT_ID
+            [ "$PLAID_CLIENT_ID" = "q" ] && break
+            read -p "  Secret (Production): " PLAID_SECRET
+            export PLAID_CLIENT_ID PLAID_SECRET
+        done
         plaid config set --client-id "$PLAID_CLIENT_ID" --secret "$PLAID_SECRET" --env production 2>/dev/null
         success "Credentials saved"
     fi
