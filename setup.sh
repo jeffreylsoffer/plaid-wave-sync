@@ -501,9 +501,9 @@ print('\t'.join([d.get('name','Bank'),d.get('token',''),d.get('type','checking')
                 if [ -s /tmp/wave-opts-display.txt ]; then
                     awk -F'|' '{printf "    %d. %s  [%s]\n", NR, $1, $2}' /tmp/wave-opts-display.txt
                     echo -e "    0. Skip this account"
-                    read -p "  Enter a number (or type a name): " wave_input
+                    read -p "  Enter a number (or type a name): " wave_input < /dev/tty
                 else
-                    read -p "  Wave account name (none auto-listed, Enter to skip): " wave_input
+                    read -p "  Wave account name (none auto-listed, Enter to skip): " wave_input < /dev/tty
                 fi
                 { [ "$wave_input" = "0" ] || [ -z "$wave_input" ]; } && continue
                 if [ "$wave_input" -eq "$wave_input" ] 2>/dev/null; then
