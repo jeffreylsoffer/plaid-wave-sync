@@ -476,7 +476,7 @@ if [ -f /tmp/plaid-tokens-all.jsonl ]; then
         # Handle unmatched accounts interactively
         # Load auto-matched accounts, then resolve the remainder interactively
         PLAID_ACCESS_TOKENS=""
-        [ -f /tmp/plaid-access-tokens.txt ] && PLAID_ACCESS_TOKENS=$(tr -d '\n' < /tmp/plaid-access-tokens.txt)
+        [ -f /tmp/plaid-access-tokens.json ] && PLAID_ACCESS_TOKENS=$(cat /tmp/plaid-access-tokens.json)
 
         if [ -f /tmp/plaid-unmatched.jsonl ] && [ -s /tmp/plaid-unmatched.jsonl ]; then
             echo ""
@@ -513,14 +513,21 @@ print('\t'.join([d.get('name','Bank'),d.get('token',''),d.get('type','checking')
                 fi
                 if [ -n "$wave_name" ]; then
                     success "Mapped $ACCT_NAME → $wave_name"
-                    ENTRY="${ACCT_NAME}:${ACCT_TOKEN}:${wave_name}:${ACCT_TYPE}:${ACCT_ID}"
-                    [ -z "$PLAID_ACCESS_TOKENS" ] && PLAID_ACCESS_TOKENS="$ENTRY" || PLAID_ACCESS_TOKENS="${PLAID_ACCESS_TOKENS},${ENTRY}"
+                    # Append to JSON array
+                    NEW_ENTRY=$(uv run python3 -c "
+import json,sys
+entry = {'name': '$ACCT_NAME', 'token': '$ACCT_TOKEN', 'wave_account': '$wave_name', 'type': '$ACCT_TYPE', 'account_id': '$ACCT_ID'}
+existing = json.loads(sys.stdin.read() or '[]')
+existing.append(entry)
+print(json.dumps(existing))
+" <<< "$PLAID_ACCESS_TOKENS")
+                    PLAID_ACCESS_TOKENS="$NEW_ENTRY"
                 fi
             done < /tmp/plaid-unmatched.jsonl
         fi
 
         export PLAID_ACCESS_TOKENS
-        rm -f /tmp/plaid-tokens-all.jsonl /tmp/plaid-access-tokens.txt /tmp/plaid-unmatched.jsonl /tmp/wave-account-options.txt /tmp/wave-opts-display.txt
+        rm -f /tmp/plaid-tokens-all.jsonl /tmp/plaid-access-tokens.json /tmp/plaid-unmatched.jsonl /tmp/wave-account-options.txt /tmp/wave-opts-display.txt
         if [ -n "$PLAID_ACCESS_TOKENS" ]; then
             success "PLAID_ACCESS_TOKENS ready"
         fi
@@ -622,7 +629,7 @@ if [ "$save_secrets" = "y" ]; then
     echo ""
     if [ -z "$PLAID_ACCESS_TOKENS" ]; then
         warn "PLAID_ACCESS_TOKENS wasn't assembled — paste it manually."
-        info "Format: Name:token:Wave Account Name:type[:account_id]  (comma-separated for multiple)"
+        info 'Format (JSON): [{"name":"MyBank","token":"access-xxx","wave_account":"Checking (001)","type":"checking"}]'
         info "List connected items with: plaid item list --json"
         read -p "  Paste PLAID_ACCESS_TOKENS (or Enter to skip): " tokens
         [ -n "$tokens" ] && PLAID_ACCESS_TOKENS="$tokens" && export PLAID_ACCESS_TOKENS

@@ -41,8 +41,8 @@ Your job: **drive setup step by step and unblock errors**, acting as an interact
    multiple businesses, list them and let the user pick the `WAVE_BUSINESS_ID`. Then run
    `uv run scripts/match_accounts.py` (needs `/tmp/plaid-tokens-all.jsonl`, `WAVE_ACCESS_TOKEN`,
    `WAVE_BUSINESS_ID`). It auto-matches by account mask; for anything unmatched, show the numbered
-   Wave-account list and let the user choose. Final value `PLAID_ACCESS_TOKENS` is comma-separated
-   `Name:token:Wave Account Name:type[:account_id]` (`type` = `checking` or `credit_card`).
+   Wave-account list and let the user choose. Final value `PLAID_ACCESS_TOKENS` is a JSON array:
+   `[{"name":"...","token":"...","wave_account":"...","type":"checking|credit_card","account_id":"..."}]`.
 5. **Keywords:** have the user export Wave → Reports → Account Transactions (General Ledger) as CSV
    into `imports/`, then `uv run scripts/build_keywords.py <csv>`.
 6. **Save + test:** with the user's OK, `gh secret set` each of `PLAID_CLIENT_ID`, `PLAID_SECRET`,

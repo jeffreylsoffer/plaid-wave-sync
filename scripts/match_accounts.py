@@ -5,7 +5,7 @@
 """Match Plaid accounts to Wave accounts by mask (type-aware).
 
 Emits, for setup.sh to consume:
-  /tmp/plaid-access-tokens.txt  — comma-joined matched entries name:token:wave:type:account_id
+  /tmp/plaid-access-tokens.json — JSON array of matched entries [{name, token, wave_account, type, account_id}]
   /tmp/plaid-unmatched.jsonl    — one {name,token,type,mask,account_id} per unmatched account
   /tmp/wave-account-options.txt — one "wave_name|category" per line (category: asset|liability)
 """
@@ -71,15 +71,16 @@ for t in tokens:
         if not hit and len(mask) >= 3:  # banks/Wave sometimes record only the last 3 digits
             hit = next((w for w in cands if mask[-3:] in w), None)
         if hit:
-            matched.append(f"{name}:{token}:{hit}:{acct_type}:{account_id}")
+            matched.append({"name": name, "token": token, "wave_account": hit,
+                            "type": acct_type, "account_id": account_id})
             print(f"  ✓ {name} (mask={mask}) → {hit} ({acct_type})")
         else:
             unmatched.append({"name": name, "token": token, "type": acct_type,
                               "mask": mask, "account_id": account_id})
             print(f"  ⚠ {name} (mask={mask}) — needs manual pick ({acct_type})")
 
-with open('/tmp/plaid-access-tokens.txt', 'w') as f:
-    f.write(','.join(matched))
+with open('/tmp/plaid-access-tokens.json', 'w') as f:
+    json.dump(matched, f)
 with open('/tmp/plaid-unmatched.jsonl', 'w') as f:
     for u in unmatched:
         f.write(json.dumps(u) + '\n')

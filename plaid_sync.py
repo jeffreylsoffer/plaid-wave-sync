@@ -15,8 +15,9 @@ Environment variables:
     PLAID_CLIENT_ID / PLAID_SECRET
     WAVE_ACCESS_TOKEN
     WAVE_BUSINESS_ID          — your Wave business ID (run --dump-accounts to find it)
-    PLAID_ACCESS_TOKENS       — comma-separated list: name:token:wave_account:type
-                                e.g. "Bluevine:access-prod-xxx:My Checking (001):checking,Chase:access-prod-yyy:Credit Card (1234):credit_card"
+    PLAID_ACCESS_TOKENS       — JSON array (preferred) or legacy colon-delimited format
+                                JSON: [{"name":"Bluevine","token":"access-prod-xxx","wave_account":"My Checking (001)","type":"checking"}]
+                                Legacy: name:token:wave_account:type (comma-separated, still supported)
 """
 
 import os, sys, time, json, logging, argparse
@@ -44,10 +45,30 @@ def load_keywords():
 
 
 def parse_accounts():
-    """Parse PLAID_ACCESS_TOKENS env var into account configs."""
-    raw = os.environ.get("PLAID_ACCESS_TOKENS", "")
+    """Parse PLAID_ACCESS_TOKENS env var into account configs.
+
+    Tries JSON first, falls back to legacy colon-delimited format.
+    """
+    raw = os.environ.get("PLAID_ACCESS_TOKENS", "").strip()
     if not raw:
         return []
+    # Try JSON first
+    if raw.startswith("["):
+        try:
+            entries = json.loads(raw)
+            accounts = []
+            for e in entries:
+                if not all(k in e for k in ("name", "token", "wave_account", "type")):
+                    log.warning(f"Skipping JSON entry missing required fields: {list(e.keys())}")
+                    continue
+                accounts.append({"name": e["name"], "token": e["token"],
+                                 "wave_account": e["wave_account"], "type": e["type"],
+                                 "account_id": e.get("account_id", "")})
+            return accounts
+        except json.JSONDecodeError as exc:
+            log.error(f"PLAID_ACCESS_TOKENS looks like JSON but failed to parse: {exc}")
+            return []
+    # Legacy colon-delimited format
     accounts = []
     for entry in raw.split(","):
         parts = entry.strip().split(":")
@@ -528,7 +549,7 @@ def main():
     accounts_cfg = parse_accounts()
     if not accounts_cfg:
         log.error("No accounts configured. Set PLAID_ACCESS_TOKENS env var.")
-        log.error("Format: Name:access-token:Wave Account Name:checking")
+        log.error('Format (JSON): [{"name":"MyBank","token":"access-xxx","wave_account":"Checking","type":"checking"}]')
         sys.exit(1)
 
     if args.reconcile:
