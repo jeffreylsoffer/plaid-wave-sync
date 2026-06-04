@@ -100,7 +100,7 @@ echo ""
 
 # ─── Codespaces check ─────────────────────────────────────────────────────────
 
-if [ -n "$CODESPACES" ]; then
+if [ -n "$CODESPACES" ] && [ -z "$SKIP_FORK_CHECK" ]; then
     REPO_SLUG=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
     if [ "$REPO_SLUG" = "jeffreylsoffer/plaid-wave-sync" ]; then
         echo -e "${RED}${BOLD}  ERROR: You opened a Codespace on the upstream repo.${NC}"
