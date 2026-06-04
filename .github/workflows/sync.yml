@@ -13,8 +13,8 @@ on:
         description: 'Dry run (true/false)'
         default: 'false'
       verbose:
-        description: 'Verbose logs (exposes account/vendor names — only safe on PRIVATE repos)'
-        default: 'false'
+        description: 'Verbose logs: auto (private=on, public=off), true, or false'
+        default: 'auto'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -52,6 +52,7 @@ jobs:
 
       - name: Run sync
         env:
+          GH_TOKEN: ${{ github.token }}
           PLAID_CLIENT_ID: ${{ secrets.PLAID_CLIENT_ID }}
           PLAID_SECRET: ${{ secrets.PLAID_SECRET }}
           WAVE_ACCESS_TOKEN: ${{ secrets.WAVE_ACCESS_TOKEN }}
@@ -60,13 +61,20 @@ jobs:
         run: |
           DAYS="${{ github.event.inputs.days || '3' }}"
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
-          VERBOSE="${{ github.event.inputs.verbose || 'false' }}"
+          VERBOSE="${{ github.event.inputs.verbose || 'auto' }}"
           CMD="uv run plaid_sync.py --days $DAYS"
           if [ "$DRY_RUN" = "true" ]; then
             CMD="$CMD --dry-run"
           fi
-          # Default to quiet so account/vendor names never land in public Action logs.
-          # Opt into verbose only via manual dispatch (intended for private repos).
+          # Decide log verbosity:
+          #   - true  → full detail
+          #   - false → quiet
+          #   - auto (default, incl. scheduled runs) → quiet on public, full detail on private
+          if [ "$VERBOSE" = "auto" ]; then
+            # Fail safe: if we can't confirm the repo is private, assume public → quiet.
+            PRIVATE=$(gh api "repos/${{ github.repository }}" --jq '.private' 2>/dev/null || echo "false")
+            [ "$PRIVATE" = "true" ] && VERBOSE="true" || VERBOSE="false"
+          fi
           if [ "$VERBOSE" != "true" ]; then
             CMD="$CMD --quiet"
           fi
