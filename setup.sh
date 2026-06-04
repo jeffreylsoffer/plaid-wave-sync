@@ -105,14 +105,25 @@ if [ -n "$CODESPACES" ] && [ -z "$SKIP_FORK_CHECK" ]; then
     if [ "$REPO_SLUG" = "jeffreylsoffer/plaid-wave-sync" ]; then
         echo -e "${RED}${BOLD}  ERROR: You opened a Codespace on the upstream repo.${NC}"
         echo ""
-        echo -e "  You need to ${BOLD}fork first${NC}, then open a Codespace on your fork:"
-        echo -e "  1. Go to ${CYAN}https://github.com/jeffreylsoffer/plaid-wave-sync${NC}"
-        echo -e "  2. Click ${BOLD}Fork${NC} (top right)"
-        echo -e "  3. On YOUR fork, click ${BOLD}Code → Codespaces → New codespace${NC}"
+        echo -e "  Secrets must be saved to a repo you own. Let's fix this."
         echo ""
-        echo -e "  This is required because secrets must be saved to a repo you own."
-        echo ""
-        exit 1
+        read -p "  Fork the repo and re-point this Codespace to your fork? (y/n): " do_fork
+        if [ "$do_fork" = "y" ]; then
+            if gh repo fork --remote 2>/dev/null; then
+                success "Forked! Origin now points to your copy."
+            else
+                warn "Fork failed. Fork manually on GitHub, then run: gh repo fork --remote"
+                exit 1
+            fi
+        else
+            echo ""
+            echo -e "  To fix manually:"
+            echo -e "  1. Fork at ${CYAN}https://github.com/jeffreylsoffer/plaid-wave-sync${NC}"
+            echo -e "  2. Run: ${CYAN}gh repo fork --remote${NC}"
+            echo -e "  3. Re-run: ${CYAN}./setup.sh${NC}"
+            echo ""
+            exit 1
+        fi
     fi
 fi
 
