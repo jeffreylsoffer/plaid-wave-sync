@@ -48,6 +48,15 @@ info() {
     echo -e "  ${DIM}$1${NC}"
 }
 
+# Resolve the owner/repo from the ORIGIN remote only.
+# We deliberately avoid `gh repo view`, because in a fork (or a Codespace on a
+# fork) gh's base-repo resolution prefers the `upstream` parent — which would
+# point at the source repo, not the user's own copy.
+origin_slug() {
+    git config --get remote.origin.url 2>/dev/null \
+        | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'
+}
+
 # Extract production client_id/secret from plaid-cli config (tab-separated).
 # Walks the JSON and prefers any path containing "production" so we never grab
 # a sandbox/development secret by accident.
@@ -101,7 +110,7 @@ echo ""
 # ─── Codespaces check ─────────────────────────────────────────────────────────
 
 if [ -n "$CODESPACES" ] && [ -z "$SKIP_FORK_CHECK" ]; then
-    REPO_SLUG=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+    REPO_SLUG=$(origin_slug)
     if [ "$REPO_SLUG" = "jeffreylsoffer/plaid-wave-sync" ]; then
         echo -e "${RED}${BOLD}  ERROR: You opened a Codespace on the upstream repo.${NC}"
         echo ""
@@ -442,7 +451,7 @@ fi
 
 if [ -z "$WAVE_ACCESS_TOKEN" ]; then
     # Check if it's already saved as a GitHub secret (user re-running setup)
-    if gh secret list 2>/dev/null | grep -q "WAVE_ACCESS_TOKEN"; then
+    if gh secret list --repo "$(origin_slug)" 2>/dev/null | grep -q "WAVE_ACCESS_TOKEN"; then
         info "WAVE_ACCESS_TOKEN already saved in GitHub secrets, but we need a copy locally for matching."
         echo -e "  Get it from: ${CYAN}https://developer-apps.waveapps.com${NC} → your app → Full Access Token"
         read -p "  Paste your Wave token: " WAVE_ACCESS_TOKEN
@@ -640,7 +649,7 @@ if [ -z "$PLAID_SECRET" ]; then
     export PLAID_SECRET
 fi
 
-TARGET_REPO=$(git config --get remote.origin.url | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+TARGET_REPO=$(origin_slug)
 if [ "$TARGET_REPO" = "jeffreylsoffer/plaid-wave-sync" ]; then
     warn "Your origin remote points to the upstream repo, not your fork."
     warn "Fork the repo on GitHub first, then update your remote:"
@@ -728,7 +737,7 @@ else
         sleep 10
         RUN_ID=$(gh run list --workflow=sync.yml -L 1 --json databaseId -q '.[0].databaseId' --repo "$TARGET_REPO" 2>/dev/null)
         if [ -n "$RUN_ID" ]; then
-            gh run watch "$RUN_ID" --exit-status 2>/dev/null && success "Test run passed! ✓" || warn "Test run failed — check Actions tab for details"
+            gh run watch "$RUN_ID" --repo "$TARGET_REPO" --exit-status 2>/dev/null && success "Test run passed! ✓" || warn "Test run failed — check Actions tab for details"
             REPO_URL="https://github.com/$TARGET_REPO"
             echo -e "  ${CYAN}${REPO_URL}/actions/runs/${RUN_ID}${NC}"
         fi
