@@ -12,15 +12,19 @@ Automatically sync bank transactions from [Plaid](https://plaid.com) → [Wave](
 
 ## Setup (5 minutes)
 
-### Step 1 → Fork this repo
+### Step 1 → Create your own private copy
 
-[![Fork this repo](https://img.shields.io/badge/1-Fork_this_repo_→-181717?style=for-the-badge&logo=github)](../../fork)
+[![Use this template](https://img.shields.io/badge/1-Use_this_template_→-238636?style=for-the-badge&logo=github)](../../generate)
+
+Click the button, then **set the repository to Private**. This creates your own
+independent copy — not a fork.
+
+> **Why a template, not a fork?** Forks of a public repo can't be made private,
+> so your Action logs would be public. A private template copy keeps them private.
 
 ### Step 2 → Open in Codespaces
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/jeffreylsoffer/plaid-wave-sync?quickstart=1)
-
-> **Important:** Open the Codespace from YOUR fork, not this repo.
+On **your new private repo**, click **Code → Codespaces → Create codespace**.
 
 The setup script runs automatically and walks you through everything:
 - Creates your Plaid account & activates trial (10 free bank connections)
@@ -31,6 +35,14 @@ The setup script runs automatically and walks you through everything:
 - Enables the workflow and triggers a test run
 
 Once setup completes, close the Codespace — everything runs automatically from there.
+
+> **Prefer the command line?** One command does it all (creates a private repo
+> from the template and clones it):
+> ```bash
+> gh repo create plaid-wave-sync --private \
+>   --template jeffreylsoffer/plaid-wave-sync --clone
+> cd plaid-wave-sync && ./setup.sh
+> ```
 
 ---
 
@@ -82,7 +94,7 @@ Plaid (bank)              keywords.json           Wave (accounting)
 
 | Platform | How |
 |----------|-----|
-| **GitHub Actions** (recommended) | Fork → setup → done. Runs daily at 9am ET. |
+| **GitHub Actions** (recommended) | Use template (Private) → setup → done. Runs daily at 9am ET. |
 | **Any VPS / cron** | `0 13 * * * cd /path && uv run plaid_sync.py --days 3` (9am ET / 1pm UTC) |
 
 ## FAQ

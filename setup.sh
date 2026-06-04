@@ -105,23 +105,21 @@ if [ -n "$CODESPACES" ] && [ -z "$SKIP_FORK_CHECK" ]; then
     if [ "$REPO_SLUG" = "jeffreylsoffer/plaid-wave-sync" ]; then
         echo -e "${RED}${BOLD}  ERROR: You opened a Codespace on the upstream repo.${NC}"
         echo ""
-        echo -e "  Secrets must be saved to a repo you own. Let's fix this."
+        echo -e "  Create your own private copy:"
+        echo -e "  1. Open ${CYAN}https://github.com/jeffreylsoffer/plaid-wave-sync/generate${NC}"
+        echo -e "  2. Set it to ${BOLD}Private${NC} and create it"
+        echo -e "  3. Open a Codespace on that repo and run ./setup.sh"
         echo ""
-        read -p "  Fork the repo and re-point this Codespace to your fork? (y/n): " do_fork
+        read -p "  Or make a quick PUBLIC fork here instead? (y/n): " do_fork
         if [ "$do_fork" = "y" ]; then
             if gh repo fork --remote 2>/dev/null; then
                 success "Forked! Origin now points to your copy."
+                warn "This fork is PUBLIC. For a private copy, use the template link above."
             else
-                warn "Fork failed. Fork manually on GitHub, then run: gh repo fork --remote"
+                warn "Fork failed. Use the template link above for a private copy."
                 exit 1
             fi
         else
-            echo ""
-            echo -e "  To fix manually:"
-            echo -e "  1. Fork at ${CYAN}https://github.com/jeffreylsoffer/plaid-wave-sync${NC}"
-            echo -e "  2. Run: ${CYAN}gh repo fork --remote${NC}"
-            echo -e "  3. Re-run: ${CYAN}./setup.sh${NC}"
-            echo ""
             exit 1
         fi
     fi
@@ -670,8 +668,16 @@ if [ "$save_secrets" = "y" ]; then
         gh auth login -w -p https --git-protocol https -s repo
     fi
 
-    # Make repo private to protect financial data in Action logs
-    gh repo edit "$TARGET_REPO" --visibility private 2>/dev/null && success "Repo set to private" || true
+    # Protect financial data in Action logs by keeping the repo private.
+    VIS=$(gh repo view "$TARGET_REPO" --json visibility -q '.visibility' 2>/dev/null)
+    if [ "$VIS" = "PRIVATE" ]; then
+        success "Repo is private — Action logs are protected"
+    elif gh repo edit "$TARGET_REPO" --visibility private 2>/dev/null; then
+        success "Repo set to private"
+    else
+        warn "Repo is PUBLIC. Logs run in --quiet mode, but for a private copy recreate from:"
+        warn "  ${CYAN}https://github.com/jeffreylsoffer/plaid-wave-sync/generate${NC}"
+    fi
 
     _set_secret PLAID_CLIENT_ID "$PLAID_CLIENT_ID"
     _set_secret PLAID_SECRET "$PLAID_SECRET"
