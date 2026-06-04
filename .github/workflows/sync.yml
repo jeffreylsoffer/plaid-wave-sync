@@ -12,6 +12,9 @@ on:
       dry_run:
         description: 'Dry run (true/false)'
         default: 'false'
+      verbose:
+        description: 'Verbose logs (exposes account/vendor names — only safe on PRIVATE repos)'
+        default: 'false'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -57,9 +60,15 @@ jobs:
         run: |
           DAYS="${{ github.event.inputs.days || '3' }}"
           DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          VERBOSE="${{ github.event.inputs.verbose || 'false' }}"
           CMD="uv run plaid_sync.py --days $DAYS"
           if [ "$DRY_RUN" = "true" ]; then
             CMD="$CMD --dry-run"
+          fi
+          # Default to quiet so account/vendor names never land in public Action logs.
+          # Opt into verbose only via manual dispatch (intended for private repos).
+          if [ "$VERBOSE" != "true" ]; then
+            CMD="$CMD --quiet"
           fi
           $CMD || EXIT_CODE=$?
           if [ "${EXIT_CODE:-0}" = "2" ]; then

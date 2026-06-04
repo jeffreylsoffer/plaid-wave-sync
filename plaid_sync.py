@@ -417,6 +417,8 @@ def main():
     parser.add_argument("--add-bank", action="store_true", help="Connect a new bank via Hosted Link")
     parser.add_argument("--reauth", action="store_true", help="Generate a re-auth link for an expired token")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Suppress identifying details (account/vendor names, IDs) — for public CI logs")
     args = parser.parse_args()
 
     if args.debug:
@@ -564,15 +566,22 @@ def main():
     # ── Sync ──────────────────────────────────────────────────────────────────
     created = skipped = errors = 0
 
-    for acct_cfg in accounts_cfg:
+    for acct_idx, acct_cfg in enumerate(accounts_cfg, start=1):
         acct_type = acct_cfg["type"]
         wallet = find_account_id(wave_accounts, acct_cfg["wave_account"])
         if not wallet:
-            log.error(f"Wave account '{acct_cfg['wave_account']}' not found! Run --dump-accounts")
+            # Don't echo the missing account name in quiet mode.
+            if args.quiet:
+                log.error(f"Account #{acct_idx}: Wave account not found. Run --dump-accounts locally.")
+            else:
+                log.error(f"Wave account '{acct_cfg['wave_account']}' not found! Run --dump-accounts")
             errors += 1
             continue
 
-        log.info(f"\n{'='*60}\n{acct_cfg['name']} → {wallet['name']} ({acct_type})\n{'='*60}")
+        # In quiet mode, never log the bank/account/wallet name — use a positional alias.
+        acct_label = f"Account #{acct_idx} ({acct_type})" if args.quiet else \
+                     f"{acct_cfg['name']} → {wallet['name']} ({acct_type})"
+        log.info(f"\n{'='*60}\n{acct_label}\n{'='*60}")
 
         txns = fetch_plaid_transactions(acct_cfg["token"], args.days,
                                         [acct_cfg["account_id"]] if acct_cfg.get("account_id") else None)
@@ -612,7 +621,10 @@ def main():
                     matched = f"UNCATEGORIZED → {fallback_acct['name']}"
                     log.debug(f"  UNMATCHED → {fallback}: {name} | ${abs(amount):.2f}")
                 else:
-                    log.error(f"  NO MATCH: {name} | ${abs(amount):.2f}")
+                    if args.quiet:
+                        log.error(f"  NO MATCH & no fallback account (see local logs)")
+                    else:
+                        log.error(f"  NO MATCH: {name} | ${abs(amount):.2f}")
                     errors += 1
                     continue
 
@@ -622,7 +634,7 @@ def main():
             invoice_matched = None
             if not is_expense and acct_type == "checking" and open_invoices:
                 invoice_matched = match_invoice(name, amount, open_invoices)
-                if invoice_matched:
+                if invoice_matched and not args.quiet:
                     log.info(f"    📎 Matched invoice #{invoice_matched['number']}")
 
             if args.dry_run:
@@ -633,7 +645,10 @@ def main():
                 if invoice_matched:
                     record_invoice_payment(invoice_matched["id"], amount, date, wallet["id"])
                     open_invoices.remove(invoice_matched)
-                    log.info(f"    ✓ Invoice #{invoice_matched['number']} marked paid")
+                    if args.quiet:
+                        log.info(f"    ✓ invoice payment recorded")
+                    else:
+                        log.info(f"    ✓ Invoice #{invoice_matched['number']} marked paid")
                     created += 1
                 else:
                     wave_id = create_wave_transaction(
@@ -642,7 +657,10 @@ def main():
                         external_id=txn_id, acct_type=acct_type,
                         is_expense=is_expense, biz_id=biz_id,
                     )
-                    log.info(f"    ✓ {wave_id[:30]}")
+                    if args.quiet:
+                        log.info(f"    ✓ created")
+                    else:
+                        log.info(f"    ✓ {wave_id[:30]}")
                     created += 1
             except DuplicateError:
                 log.debug(f"    ⊘ duplicate")
