@@ -24,7 +24,12 @@ independent copy — not a fork.
 
 ### Step 2 → Open in Codespaces
 
-On **your new private repo**, click **Code → Codespaces → Create codespace**.
+On **your new private repo**, click the button below (or **Code → Codespaces → Create codespace**):
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](../../codespaces/new)
+
+> The link above is relative — it opens a Codespace on **whatever repo you're viewing**,
+> so it works on your copy, not this one.
 
 The setup script runs automatically and walks you through everything:
 - Creates your Plaid account & activates trial (10 free bank connections)
