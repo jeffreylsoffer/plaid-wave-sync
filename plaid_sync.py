@@ -629,7 +629,8 @@ def main():
                     continue
 
             direction = "EXPENSE" if is_expense else "INCOME"
-            log.debug(f"  {direction}: {name} | ${abs(amount):.2f} → {matched}")
+            detail = f"{direction}: {name} | ${abs(amount):.2f} → {matched}"
+            log.debug(f"  {detail}")
 
             invoice_matched = None
             if not is_expense and acct_type == "checking" and open_invoices:
@@ -638,6 +639,8 @@ def main():
                     log.info(f"    📎 Matched invoice #{invoice_matched['number']}")
 
             if args.dry_run:
+                if not args.quiet:
+                    log.info(f"  [dry-run] {detail}")
                 skipped += 1
                 continue
 
@@ -648,7 +651,7 @@ def main():
                     if args.quiet:
                         log.info(f"    ✓ invoice payment recorded")
                     else:
-                        log.info(f"    ✓ Invoice #{invoice_matched['number']} marked paid")
+                        log.info(f"    ✓ {detail} (Invoice #{invoice_matched['number']})")
                     created += 1
                 else:
                     wave_id = create_wave_transaction(
@@ -657,10 +660,11 @@ def main():
                         external_id=txn_id, acct_type=acct_type,
                         is_expense=is_expense, biz_id=biz_id,
                     )
+                    log.debug(f"    wave_id={wave_id}")
                     if args.quiet:
                         log.info(f"    ✓ created")
                     else:
-                        log.info(f"    ✓ {wave_id[:30]}")
+                        log.info(f"    ✓ {detail}")
                     created += 1
             except DuplicateError:
                 log.debug(f"    ⊘ duplicate")
