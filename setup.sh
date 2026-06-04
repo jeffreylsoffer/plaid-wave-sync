@@ -98,9 +98,23 @@ echo -e "${BOLD}  ║     Plaid → Wave in 5 minutes           ║${NC}"
 echo -e "${BOLD}  ╚══════════════════════════════════════════╝${NC}"
 echo ""
 
-# ─── Make repo private ────────────────────────────────────────────────────────
+# ─── Codespaces check ─────────────────────────────────────────────────────────
 
-# ─── Make repo private ────────────────────────────────────────────────────────
+if [ -n "$CODESPACES" ]; then
+    REPO_SLUG=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null)
+    if [ "$REPO_SLUG" = "jeffreylsoffer/plaid-wave-sync" ]; then
+        echo -e "${RED}${BOLD}  ERROR: You opened a Codespace on the upstream repo.${NC}"
+        echo ""
+        echo -e "  You need to ${BOLD}fork first${NC}, then open a Codespace on your fork:"
+        echo -e "  1. Go to ${CYAN}https://github.com/jeffreylsoffer/plaid-wave-sync${NC}"
+        echo -e "  2. Click ${BOLD}Fork${NC} (top right)"
+        echo -e "  3. On YOUR fork, click ${BOLD}Code → Codespaces → New codespace${NC}"
+        echo ""
+        echo -e "  This is required because secrets must be saved to a repo you own."
+        echo ""
+        exit 1
+    fi
+fi
 
 # (repo privacy is set in Step 6 after gh auth)
 
