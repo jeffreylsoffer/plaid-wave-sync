@@ -453,14 +453,26 @@ def main():
                 acct_type = "credit_card" if a["type"] == "credit" else "checking"
                 print(f"  {a['name']} ({a['subtype']}) mask={a['mask']} → type={acct_type}")
 
-            # Write details to file for setup.sh
+            # Print token to stdout so it's never silently lost
+            print(f"\n  access_token: {access_token}")
+            print(f"  item_id:      {item_id}")
+
+            # Write details to /tmp for setup.sh
             import json as _json
+            token_data = {
+                "access_token": access_token,
+                "item_id": item_id,
+                "accounts": [{"name": a["name"], "mask": a["mask"], "account_id": a["account_id"], "type": "credit_card" if a["type"] == "credit" else "checking"} for a in accts]
+            }
             with open("/tmp/plaid-new-token.txt", "w") as f:
-                _json.dump({
-                    "access_token": access_token,
-                    "item_id": item_id,
-                    "accounts": [{"name": a["name"], "mask": a["mask"], "account_id": a["account_id"], "type": "credit_card" if a["type"] == "credit" else "checking"} for a in accts]
-                }, f)
+                _json.dump(token_data, f)
+
+            # Persistent log — survives Codespace rebuilds if HOME persists
+            token_log = Path.home() / ".config" / "plaid-wave-sync" / "tokens.jsonl"
+            token_log.parent.mkdir(parents=True, exist_ok=True)
+            with open(token_log, "a") as f:
+                f.write(_json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), **token_data}) + "\n")
+            print(f"\n  Token also saved to: {token_log}")
         else:
             print("\n✗ No bank connected after 10 minutes.")
             print("")

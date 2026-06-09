@@ -511,6 +511,20 @@ echo ""
 
 # ─── Match Plaid accounts to Wave accounts ────────────────────────────────────
 
+# If this session produced no tokens but a persistent log exists, point the user
+# at it rather than parsing it automatically — they (or Copilot) can paste a token
+# in Step 6. The log is append-only across runs, so auto-feeding it risks reviving
+# expired tokens or creating duplicates.
+if [ ! -f /tmp/plaid-tokens-all.jsonl ] && [ -f "$HOME/.config/plaid-wave-sync/tokens.jsonl" ]; then
+    warn "No tokens from this session, but previously-connected banks are saved here:"
+    info "  ~/.config/plaid-wave-sync/tokens.jsonl"
+    echo ""
+    cat "$HOME/.config/plaid-wave-sync/tokens.jsonl"
+    echo ""
+    info "Copy an 'access_token' value above and paste it at the Step 6 prompt,"
+    info "or connect a bank above for a fresh one."
+fi
+
 if [ -f /tmp/plaid-tokens-all.jsonl ]; then
     if [ -z "$WAVE_BUSINESS_ID" ]; then
         warn "Wave business ID not set — skipping auto-match. You'll set tokens manually in Step 6."

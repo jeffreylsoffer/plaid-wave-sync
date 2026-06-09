@@ -55,6 +55,14 @@ Your job: **drive setup step by step and unblock errors**, acting as an interact
 - `Installing Homebrew (failed)` but plaid works → benign post-install refresh; ignore.
 - No Plaid login link → it prints *after* pressing Enter; or `cat /tmp/plaid-login.log` to find the `https://` URL.
 - Stuck at a "paste PLAID_ACCESS_TOKENS" prompt → matching produced nothing; connect a bank or paste an existing token (option `p`), then re-run matching.
+- Bank connected successfully but "PLAID_ACCESS_TOKENS wasn't assembled" → the token didn't reach
+  the matching step. Check `cat ~/.config/plaid-wave-sync/tokens.jsonl` — tokens are logged there
+  persistently. If found, paste the `access_token` value when prompted. If empty, the exchange
+  failed silently; re-run `--add-bank` and immediately verify `/tmp/plaid-new-token.txt` exists.
+- `plaid: command not found` → run `eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"` then retry.
+- `plaid item list` shows empty → the Plaid CLI's local store is separate from `--add-bank`.
+  Items created via `--add-bank` won't appear there. Use `cat ~/.config/plaid-wave-sync/tokens.jsonl`
+  or the Plaid Dashboard (Activity → Items) to confirm connections exist.
 - `PLAID_SECRET` empty / unrecognized in the Action → saved empty or as an Environment secret; re-save as a **Repository** secret.
 - Action runs old code after updating the Codespace → Codespace ≠ fork; run `./update.sh` or GitHub "Sync fork".
 - Bank token expired (`ITEM_LOGIN_REQUIRED`) → `uv run plaid_sync.py --reauth`.
