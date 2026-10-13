@@ -63,5 +63,5 @@
   },
 
   "fallback_expense": "Uncategorized Expense",
-  "fallback_income": "Other"
+  "fallback_income": "Uncategorized Income"
 }
