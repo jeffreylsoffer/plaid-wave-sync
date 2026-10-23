@@ -45,7 +45,7 @@ def load_keywords():
         sys.exit(1)
     with open(kw_path) as f:
         data = json.load(f)
-    return data["keywords"], data.get("fallback_expense", "Uncategorized Expense"), data.get("fallback_income", "Other")
+    return data["keywords"], data.get("fallback_expense", "Uncategorized Expense"), data.get("fallback_income", "Uncategorized Income")
 
 
 def parse_accounts():
@@ -397,10 +397,24 @@ def record_invoice_payment(invoice_id, amount, date, payment_account_id):
 
 # ─── Plaid Hosted Link ────────────────────────────────────────────────────────
 
+def create_link_token(payload):
+    """Create a Link token for the configured countries (PLAID_COUNTRY_CODES,
+    default US,CA). Plaid rejects a multi-country request with INVALID_PRODUCT
+    unless the account is approved for every listed country, so fall back to
+    US-only in that case rather than breaking linking for US-only accounts."""
+    countries = [c.strip().upper() for c in
+                 os.environ.get("PLAID_COUNTRY_CODES", "US,CA").split(",") if c.strip()] or ["US"]
+    try:
+        return plaid_post("/link/token/create", {**payload, "country_codes": countries})
+    except RuntimeError as e:
+        if "INVALID_PRODUCT" in str(e) and countries != ["US"]:
+            log.info(f"Plaid account isn't enabled for all of {','.join(countries)}; retrying with US only")
+            return plaid_post("/link/token/create", {**payload, "country_codes": ["US"]})
+        raise
+
 def generate_reauth_link(access_token):
-    data = plaid_post("/link/token/create", {
+    data = create_link_token({
         "client_name": "plaid-wave-sync",
-        "country_codes": ["US", "CA"],
         "language": "en",
         "user": {"client_user_id": "user"},
         "access_token": access_token,
@@ -411,9 +425,8 @@ def generate_reauth_link(access_token):
 
 def generate_new_link():
     try:
-        data = plaid_post("/link/token/create", {
+        data = create_link_token({
             "client_name": "plaid-wave-sync",
-            "country_codes": ["US", "CA"],
             "language": "en",
             "user": {"client_user_id": "user"},
             "products": ["transactions"],

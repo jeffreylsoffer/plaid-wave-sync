@@ -67,6 +67,10 @@ uv run plaid_sync.py --reconcile --days 7
 uv run plaid_sync.py --dump-accounts
 ```
 
+**Canadian banks:** `--add-bank` and `--reauth` offer US and Canadian banks. If your
+Plaid account isn't approved for Canada, they quietly fall back to US-only. To pick
+the countries yourself, set `PLAID_COUNTRY_CODES` (e.g. `US` or `US,CA`).
+
 ## How It Works
 
 ```
