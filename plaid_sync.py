@@ -45,7 +45,7 @@ def load_keywords():
         sys.exit(1)
     with open(kw_path) as f:
         data = json.load(f)
-    return data["keywords"], data.get("fallback_expense", "Uncategorized Expense"), data.get("fallback_income", "Other")
+    return data["keywords"], data.get("fallback_expense", "Uncategorized Expense"), data.get("fallback_income", "Uncategorized Income")
 
 
 def parse_accounts():
@@ -77,7 +77,7 @@ def parse_accounts():
     for entry in raw.split(","):
         parts = entry.strip().split(":")
         if len(parts) < 4:
-            log.warning(f"Skipping malformed account entry: {entry}")
+            log.warning(f"Skipping malformed account entry: {entry.strip().split(':')[0]}")
             continue
         name, token, rest = parts[0], parts[1], parts[2:]
         # Schema: name:token:wave_account:type[:account_id]. Wave name may contain
@@ -213,6 +213,12 @@ def get_plaid_accounts(access_token):
         data = plaid_post("/accounts/get", {"access_token": access_token})
         _plaid_accounts_cache[access_token] = data.get("accounts", [])
     return _plaid_accounts_cache[access_token]
+
+
+def get_plaid_account(acct_cfg, account_id):
+    """Return the Plaid account dict for a resolved account_id."""
+    return next((a for a in get_plaid_accounts(acct_cfg["token"])
+                 if a.get("account_id") == account_id), None)
 
 
 def resolve_plaid_account_id(acct_cfg):
@@ -391,10 +397,24 @@ def record_invoice_payment(invoice_id, amount, date, payment_account_id):
 
 # ─── Plaid Hosted Link ────────────────────────────────────────────────────────
 
+def create_link_token(payload):
+    """Create a Link token for the configured countries (PLAID_COUNTRY_CODES,
+    default US,CA). Plaid rejects a multi-country request with INVALID_PRODUCT
+    unless the account is approved for every listed country, so fall back to
+    US-only in that case rather than breaking linking for US-only accounts."""
+    countries = [c.strip().upper() for c in
+                 os.environ.get("PLAID_COUNTRY_CODES", "US,CA").split(",") if c.strip()] or ["US"]
+    try:
+        return plaid_post("/link/token/create", {**payload, "country_codes": countries})
+    except RuntimeError as e:
+        if "INVALID_PRODUCT" in str(e) and countries != ["US"]:
+            log.info(f"Plaid account isn't enabled for all of {','.join(countries)}; retrying with US only")
+            return plaid_post("/link/token/create", {**payload, "country_codes": ["US"]})
+        raise
+
 def generate_reauth_link(access_token):
-    data = plaid_post("/link/token/create", {
+    data = create_link_token({
         "client_name": "plaid-wave-sync",
-        "country_codes": ["US"],
         "language": "en",
         "user": {"client_user_id": "user"},
         "access_token": access_token,
@@ -405,9 +425,8 @@ def generate_reauth_link(access_token):
 
 def generate_new_link():
     try:
-        data = plaid_post("/link/token/create", {
+        data = create_link_token({
             "client_name": "plaid-wave-sync",
-            "country_codes": ["US"],
             "language": "en",
             "user": {"client_user_id": "user"},
             "products": ["transactions"],
@@ -448,6 +467,10 @@ def reconcile(accounts_cfg, days):
         account_id = resolve_plaid_account_id(acct_cfg)
         if not account_id:
             log.error(f"  {acct_cfg['name']}: could not resolve to a single Plaid account — skipped")
+            continue
+        plaid_acct = get_plaid_account(acct_cfg, account_id)
+        if plaid_acct and plaid_acct.get("type") == "investment":
+            log.info(f"  {acct_cfg['name']}: investment account — Plaid's transactions API doesn't cover it, skipped")
             continue
         txns = fetch_plaid_transactions(acct_cfg["token"], days, [account_id])
         plaid_out = sum(t["amount"] for t in txns if t["amount"] > 0 and not t["pending"])
@@ -649,6 +672,14 @@ def main():
             else:
                 log.error(f"Could not resolve '{acct_cfg['name']}' to a single Plaid account — skipped (refusing to sync the whole Plaid item)")
             errors += 1
+            continue
+
+        plaid_acct = get_plaid_account(acct_cfg, account_id)
+        if plaid_acct and plaid_acct.get("type") == "investment":
+            if args.quiet:
+                log.info(f"Account #{acct_idx}: investment account — not transaction-syncable, skipped")
+            else:
+                log.info(f"Skipping '{acct_cfg['name']}': '{plaid_acct['name']}' is an investment account — Plaid's transactions API doesn't cover it")
             continue
 
         # In quiet mode, never log the bank/account/wallet name — use a positional alias.
